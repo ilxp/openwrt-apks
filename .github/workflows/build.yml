@@ -119,84 +119,75 @@ jobs:
       - name: Build Packages
         env:
           SDK_VER: "25.12.2"
+          GOPROXY: "https://goproxy.cn,direct"
+          GOSUMDB: "sum.golang.google.cn"
         run: |
           set -euo pipefail
-          
-          # ★ 核心修复：保留系统默认环境，只把我们的工具追加进去
           export PATH="${{ github.workspace }}/tools:${{ github.workspace }}/tools/zig:$PATH"
           
-          echo "==> 下载 ImmortalWrt SDK..."
+          echo "==> 下载解压 SDK..."
           SDK_URL="https://downloads.immortalwrt.org/releases/${SDK_VER}/targets/x86/64/immortalwrt-sdk-${SDK_VER}-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-          
-          # 此时 wget 已经可以正常找到了
           wget -q "$SDK_URL" -O sdk.tar.zst
-          
-          echo "==> 解压 SDK..."
           tar --zstd -xf sdk.tar.zst
           mv immortalwrt-sdk-* sdk
           cd sdk
           
-          echo "==> 更新基础 Feeds..."
+          echo "==> 更新 Feeds..."
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          ./scripts/feeds install golang rust
           
-          echo "==> 安装 Go 编译环境..."
-          ./scripts/feeds install golang
-          
-          echo "==> 拷贝自定义源码到 SDK 中..."
+          echo "==> 拷贝自定义源码..."
           mkdir -p package/custom
           cp -r ../package/custom/* package/custom/
-          
-          echo "==> 开始编译..."
           make defconfig
           
-          # 暴力循环编译所有解析出来的包
+          # ★ 核心步骤 1：记录编译前的包快照
+          echo "==> 正在记录 SDK 官方自带的 APK 快照..."
+          find bin/packages -name "*.apk" | sort > /tmp/sdk_original_apks.txt
+          echo "自带包数量: $(wc -l < /tmp/sdk_original_apks.txt)"
+          
+          # ★ 核心步骤 2：循环编译并记录失败状态
+          FAILED_PKGS=""
           for pkg in ${{ env.PKGS_LIST }}; do
               echo "================ 正在编译 $pkg ================"
-              make package/custom/$pkg/compile V=s -j$(nproc) || echo "⚠️ $pkg 编译失败，跳过"
-          done
-          
-      # ============================================================
-      # 6. 收集并发布
-      # ============================================================
-      - name: Collect and Release
-        run: |
-          mkdir -p output
-          echo "==> 正在从 package/custom 精准提取我们的自建包..."
-
-          # ★ 核心修复：遍历我们自己的源码目录，利用目录名和 Makefile 里的 PKG_NAME 进行精准匹配
-          for dir in sdk/package/custom/*/; do
-              [ -d "$dir" ] || continue
-              dir_name=$(basename "$dir")
-              
-              # 1. 尝试用文件夹名匹配 apk (比如 luci-app-honk, luci-theme-argon)
-              find sdk/bin/packages -type f -name "${dir_name}*.apk" -exec cp {} output/ \; 2>/dev/null || true
-              
-              # 2. 尝试从 Makefile 中提取真实的 PKG_NAME 匹配 (解决 OpenAppFilter 这种文件夹名和包名不同的情况)
-              if [ -d "$dir" ]; then
-                  find "$dir" -name "Makefile" | while read -r mf; do
-                      pkg_names=$(grep "^PKG_NAME:=" "$mf" | awk -F'=' '{print $2}' | tr -d ' ')
-                      for pkg_name in $pkg_names; do
-                          # 如果包名和文件夹名不一样，再抓一次
-                          if [ "$pkg_name" != "$dir_name" ]; then
-                              find sdk/bin/packages -type f -name "${pkg_name}*.apk" -exec cp {} output/ \; 2>/dev/null || true
-                          fi
-                      done
-                  done
+              if make package/custom/$pkg/compile V=s -j$(nproc); then
+                  echo "✅ $pkg 编译成功"
+              else
+                  echo "❌ $pkg 编译失败！"
+                  FAILED_PKGS="$FAILED_PKGS $pkg"
               fi
           done
           
-          # 去除可能因为软链接或其他原因产生的重复文件
-          find output/ -type l -delete
+          if [ -n "$FAILED_PKGS" ]; then
+              echo "⚠️ 以下包编译失败: $FAILED_PKGS"
+              echo "FAILED_PKGS=$FAILED_PKGS" >> $GITHUB_ENV
+          fi
+
+      - name: Collect and Release
+        run: |
+          mkdir -p output
+          echo "==> 正在提取新编译出来的 APK..."
           
-          echo "精准提取完成！共拿到 $(ls -1 output/*.apk 2>/dev/null | wc -l) 个属于我们自己的 APK 文件："
+          # ★ 核心步骤 3：记录编译后的包快照
+          find sdk/bin/packages -name "*.apk" | sort > /tmp/sdk_all_apks.txt
+          
+          # ★ 核心步骤 4：对比找差异！只要是多出来的，全是我们自己编的！
+          # comm -13 会找出只在第二个文件中出现的行（即新生成的 apk）
+          comm -13 /tmp/sdk_original_apks.txt /tmp/sdk_all_apks.txt > /tmp/new_apks.txt
+          
+          cat /tmp/new_apks.txt | while read -r apk; do
+              cp "$apk" output/
+          done
+          
+          echo "共精准提取到 $(ls -1 output/*.apk 2>/dev/null | wc -l) 个自建 APK 文件："
           ls -lh output/
           
-          # 顺便打个压缩包（可选）
-          if ls output/*.apk >/dev/null 2>&1; then
-            cd output
-            tar -zcvf OprX-x86_64-apks.tar.gz *.apk
-          fi
+          # 顺手打个包
+          #if ls output/*.apk >/dev/null 2>&1; then
+            #cd output
+            #tar -zcvf OprX-x86_64-apks.tar.gz *.apk
+          #fi
 
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
