@@ -2,9 +2,9 @@ name: Build APKs (x86_64 Native)
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'packages.list'
+  #push:
+    #paths:
+      #- 'packages.list'
 
 permissions:
   contents: write
