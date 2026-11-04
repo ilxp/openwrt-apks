@@ -142,12 +142,12 @@ jobs:
           cp -r ../package/custom/* package/custom/
           make defconfig
           
-          # ★ 核心步骤 1：记录编译前的包快照
-          echo "==> 正在记录 SDK 官方自带的 APK 快照..."
-          find bin/packages -name "*.apk" | sort > /tmp/sdk_original_apks.txt
+          # ★ 核心修复：先确保目录存在，再对整个 bin 目录做快照
+          mkdir -p bin
+          echo "==> 正在记录 SDK 编译前的文件快照..."
+          find bin -name "*.apk" | sort > /tmp/sdk_original_apks.txt
           echo "自带包数量: $(wc -l < /tmp/sdk_original_apks.txt)"
           
-          # ★ 核心步骤 2：循环编译并记录失败状态
           FAILED_PKGS=""
           for pkg in ${{ env.PKGS_LIST }}; do
               echo "================ 正在编译 $pkg ================"
@@ -169,11 +169,10 @@ jobs:
           mkdir -p output
           echo "==> 正在提取新编译出来的 APK..."
           
-          # ★ 核心步骤 3：记录编译后的包快照
-          find sdk/bin/packages -name "*.apk" | sort > /tmp/sdk_all_apks.txt
+          # ★ 对编译后的整个 bin 目录做快照
+          find sdk/bin -name "*.apk" | sort > /tmp/sdk_all_apks.txt
           
-          # ★ 核心步骤 4：对比找差异！只要是多出来的，全是我们自己编的！
-          # comm -13 会找出只在第二个文件中出现的行（即新生成的 apk）
+          # 对比找差异
           comm -13 /tmp/sdk_original_apks.txt /tmp/sdk_all_apks.txt > /tmp/new_apks.txt
           
           cat /tmp/new_apks.txt | while read -r apk; do
@@ -183,7 +182,6 @@ jobs:
           echo "共精准提取到 $(ls -1 output/*.apk 2>/dev/null | wc -l) 个自建 APK 文件："
           ls -lh output/
           
-          # 顺手打个包
           #if ls output/*.apk >/dev/null 2>&1; then
             #cd output
             #tar -zcvf OprX-x86_64-apks.tar.gz *.apk
