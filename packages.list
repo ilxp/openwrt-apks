@@ -1,0 +1,71 @@
+# ilxp 的定制系列
+full|iqos-openwrt|https://github.com/ilxp/iqos-openwrt.git|main
+full|admask-openwrt|https://github.com/ilxp/admask-openwrt.git|main
+full|controlplus-openwrt|https://github.com/ilxp/controlplus-openwrt.git|main
+full|onup-openwrt|https://github.com/ilxp/onup-openwrt.git|main
+
+# ==========================================
+# 大杂烩仓库（精准抽取特定文件夹）
+# ==========================================
+# 从 VIKINGYFY 提取 HomeProxy 和 sing-box 核心
+sparse|package/custom|https://github.com/VIKINGYFY/packages.git|main|luci-app-homeproxy|sing-box
+
+# ==========================================
+# 一、独立仓库（全量拉取）
+# ==========================================
+
+# ---- 主题 ----
+full|luci-theme-argon|https://github.com/jerrykuku/luci-theme-argon.git|master
+
+# ---- 代理与 VPN ----
+#full|luci-app-homeproxy|https://github.com/immortalwrt/homeproxy.git|master
+#full|luci-app-honk|https://github.com/QiuSimons/luci-app-honk.git|master
+#full|OpenClash|https://github.com/vernesong/OpenClash.git|master
+#full|OpenWrt-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki.git|main
+
+# ---- DNS ----
+full|luci-app-mosdns|https://github.com/sbwml/luci-app-mosdns.git|v5
+
+
+# ---- QoS 与流控 ----
+full|luci-app-qosmate|https://github.com/hudra0/luci-app-qosmate.git|main
+full|qosmate|https://github.com/hudra0/qosmate.git|main
+
+# ---- 管控与网络工具 ----
+full|OpenAppFilter|https://github.com/destan19/OpenAppFilter.git|master
+full|wrtbwmon|https://github.com/brvphoenix/wrtbwmon.git|master
+full|luci-app-wrtbwmon|https://github.com/brvphoenix/luci-app-wrtbwmon.git|master
+#full|luci-app-ddns-go|https://github.com/sirpdboy/luci-app-ddns-go.git|master
+#full|luci-app-lucky|https://github.com/gdy666/luci-app-lucky.git|main
+full|luci-app-openlist2|https://github.com/sbwml/luci-app-openlist2.git|main
+full|luci-app-podman|https://github.com/Zerogiven-OpenWRT-Packages/luci-app-podman.git|main
+full|luci-app-bandix|https://github.com/timsaya/luci-app-bandix.git|main
+full|openwrt-bandix|https://github.com/timsaya/openwrt-bandix.git|main
+
+# ---- 系统工具与应用 ----
+#full|istore|https://github.com/linkease/istore.git|main
+#full|istore-ui|https://github.com/linkease/istore-ui.git|main
+#full|luci-app-netdata|https://github.com/sirpdboy/luci-app-netdata.git|master
+#full|netwizard|https://github.com/sirpdboy/luci-app-netwizard.git|master
+#full|netspeedtest|https://github.com/sirpdboy/netspeedtest.git|master
+full|taskplan|https://github.com/sirpdboy/luci-app-taskplan.git|main
+full|partexp|https://github.com/sirpdboy/luci-app-partexp.git|main
+#full|luci-app-poweroff|https://github.com/esirplayground/luci-app-poweroff.git|master
+
+# ==========================================
+# 二、大杂烩仓库（精准提取文件夹）
+# ==========================================
+
+# 从 QiuSimons 的 Add 仓库提取
+sparse|package/custom|https://github.com/QiuSimons/OpenWrt-Add.git|master|legacy/openwrt_pkgs/luci-app-usb-printer
+sparse|package/custom|https://github.com/QiuSimons/OpenWrt-Add.git|master|legacy/openwrt_pkgs/luci-app-vlmcsd
+sparse|package/custom|https://github.com/QiuSimons/OpenWrt-Add.git|master|legacy/openwrt_pkgs/vlmcsd
+sparse|package/custom|https://github.com/QiuSimons/OpenWrt-Add.git|master|apps/luci-app-ramfree
+
+# 从 sbwml 仓库提取独立的组件
+#sparse|package/custom|https://github.com/sbwml/openwrt_helloworld.git|v5|chinadns-ng
+#sparse|package/custom|https://github.com/sbwml/openwrt_helloworld.git|v5|sing-box
+sparse|package/custom|https://github.com/sbwml/openwrt_pkgs.git|main|luci-app-zerotier
+
+# ---- FlowCone (精准提取 openwrt 目录下的 3 个包) ----
+sparse|package/custom|https://github.com/QiuSimons/FlowCone.git|master|openwrt/flowcone|openwrt/luci-app-flowcone|openwrt/nat6
