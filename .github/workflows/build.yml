@@ -36,19 +36,20 @@ jobs:
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
-          # 将源码移动到根目录
           mv package/custom/* ./ || true
           rm -rf package
 
-          # 自动展平：如果某个文件夹里只有一个同名文件夹且有 Makefile，就提出来
-          for dir in */; do
-              dir=${dir%/}
-              if [ -d "$dir/$dir" ] && [ ! -f "$dir/Makefile" ]; then
-                  echo "发现嵌套结构: $dir/$dir -> 正在展平"
-                  mv "$dir/$dir"/* "$dir/" 2>/dev/null || true
-                  rm -rf "$dir/$dir"
-              fi
-          done
+          # 暴力展平 honk
+          if [ -d "luci-app-honk" ]; then
+              echo "=== 展平 honk 目录 ==="
+              [ -d "luci-app-honk/honk" ] && mv "luci-app-honk/honk" ./honk
+              [ -d "luci-app-honk/luci-app-honk" ] && mv "luci-app-honk/luci-app-honk" ./luci-app-honk-ui && mv "luci-app-honk-ui" "./luci-app-honk" || true
+              rm -rf "luci-app-honk/honk" 2>/dev/null || true
+              if [ -d "luci-app-honk" ] && [ ! -f "luci-app-honk/Makefile" ]; then rm -rf "luci-app-honk"; fi
+          fi
+
+          echo "🔍 检查 honk 源码："
+          ls -la honk/Makefile
 
       # ============================================================
       # 4. 🌟 核心：动态扫描根目录，自动生成包名列表！
