@@ -164,27 +164,55 @@ jobs:
               echo "FAILED_PKGS=$FAILED_PKGS" >> $GITHUB_ENV
           fi
 
-      - name: Collect and Release
+      - name: Collect and Extract Custom Packages
         run: |
           mkdir -p output
-          echo "==> 正在提取新编译出来的 APK..."
+          echo "==> 正在精准提取属于我们的 APK..."
           
-          # ★ 对编译后的整个 bin 目录做快照
-          find sdk/bin -name "*.apk" | sort > /tmp/sdk_all_apks.txt
-          
-          # 对比找差异
-          comm -13 /tmp/sdk_original_apks.txt /tmp/sdk_all_apks.txt > /tmp/new_apks.txt
-          
-          cat /tmp/new_apks.txt | while read -r apk; do
-              cp "$apk" output/
+          # 1. 扫描我们源码目录下所有的 Makefile，提取真实的包名
+          PKG_NAMES=""
+          for makefile in $(find sdk/package/custom -name "Makefile"); do
+              # 提取 PKG_NAME:=xxx
+              name=$(grep -E "^\s*PKG_NAME\s*:?=\s*" "$makefile" | awk -F'=' '{print $2}' | awk '{print $1}' | tr -d ' "')
+              [ -n "$name" ] && PKG_NAMES="$PKG_NAMES $name"
+              
+              # 提取子包名（如 define Package/luci-app-xxx）
+              sub_names=$(grep -E "^\s*define Package/" "$makefile" | awk -F'/' '{print $2}' | tr -d ' ')
+              [ -n "$sub_names" ] && PKG_NAMES="$PKG_NAMES $sub_names"
           done
           
-          echo "共精准提取到 $(ls -1 output/*.apk 2>/dev/null | wc -l) 个自建 APK 文件："
+          # 2. 把 packages.list 里的文件夹名也加进去（防止有些包没有 PKG_NAME 只有文件夹名）
+          PKG_NAMES="$PKG_NAMES ${{ env.PKGS_LIST }}"
+          
+          # 3. 去重、去空行
+          PKG_NAMES=$(echo "$PKG_NAMES" | tr ' ' '\n' | grep -v '^$' | sort -u)
+          echo "提取到的潜在自建包名共 $(echo "$PKG_NAMES" | wc -l) 个："
+          echo "$PKG_NAMES" | sed 's/^/  - /'
+          echo ""
+          
+          # 4. 在 bin/packages 里精准寻找这些包对应的 .apk 文件
+          FOUND_COUNT=0
+          for pkg in $PKG_NAMES; do
+              # 使用 -name "${pkg}-*.apk" 和 -name "${pkg}.apk" 双重匹配
+              files=$(find sdk/bin/packages -type f \( -name "${pkg}-*.apk" -o -name "${pkg}.apk" \) 2>/dev/null)
+              if [ -n "$files" ]; then
+                  cp $files output/ 2>/dev/null || true
+                  for f in $files; do
+                      FOUND_COUNT=$((FOUND_COUNT+1))
+                  done
+              fi
+          done
+          
+          # 去除可能产生的重名文件
+          find output/ -type f ! -name "*.apk" -delete
+          
+          echo "提取完成！共精准抓到 $FOUND_COUNT 个自建 APK 文件。"
           ls -lh output/
           
           #if ls output/*.apk >/dev/null 2>&1; then
             #cd output
             #tar -zcvf OprX-x86_64-apks.tar.gz *.apk
+            #rm -f *.apk
           #fi
 
       - name: 发布 APK 到 Release
