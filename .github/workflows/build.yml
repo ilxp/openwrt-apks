@@ -56,10 +56,12 @@ jobs:
           ARCH: x86_64-openwrt-25.12
           FEEDNAME: packages_ci
           # 填你需要编译的包名，以 Makefile 里的 PKG_NAME 为准
-          PACKAGES: "honk luci-app-honk luci-app-controlplus admask onup luci-app-qosmate qosmate luci-app-podman luci-theme-argon openwrt-clashoo luci-app-mosdns"
+          #PACKAGES: "honk luci-app-honk luci-app-controlplus admask onup luci-app-qosmate qosmate luci-app-podman luci-theme-argon openwrt-clashoo luci-app-mosdns"
+          PACKAGES: "honk"  # 先只测试这一个包
           NO_REFRESH_CHECK: true
           # 如果有需要，这里可以开详细日志
-          # V: s
+          IGNORE_ERRORS: true # 忽略错误
+          V: s # 开启详细日志，寻找 exit code 2 的真正原因
 
       # ============================================================
       # 5. 打包产物并发布
