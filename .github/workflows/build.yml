@@ -22,32 +22,33 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 2. 现场执行你的魔改（从 Update PKG 复制过来）
-      # ============================================================
-      - name: Apply Patches & Modifications
-        run: |
-          # 这里的命令只是示例，请把你 Update PKG 里的 patch 和 sed 命令全贴过来！
-          
-          # 例如：
-          # sed -i '/AUTOLOAD/d' ./package/custom/shortcut-fe/shortcut-fe/Makefile
-          # patch -l -p0 < patches/OpenAppFilter-disable-auto-load-engine.patch
-          
-          # 调整嵌套目录结构（如果 sbwml 找不到 Makefile）
-          # 如果有的源码里嵌套了同名文件夹（如 xxx/xxx/Makefile），需要提出来
-          
-          echo "魔改完成！"
-
-      # ============================================================
-      # 3. 源码归位（重要！）
+      # 2. 源码归位（重要！）
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
-          # 将源码移动到仓库根目录，供 Docker 内的 SDK 读取
-          mv package/custom/* ./
+          # 1. 先把所有源码移到根目录
+          mv package/custom/* ./ || true
           rm -rf package
 
+          # 2. 特殊处理 honk 的嵌套目录
+          if [ -d "luci-app-honk" ]; then
+              echo "发现 luci-app-honk 目录，正在展平结构..."
+              # 把核心程序和界面文件夹提取到根目录
+              mv luci-app-honk/honk ./honk || true
+              mv luci-app-honk/luci-app-honk ./luci-app-honk-ui || true
+              # 如果内部也叫 luci-app-honk，先改名避免冲突，再处理
+              if [ -d "luci-app-honk-ui" ]; then
+                  mv luci-app-honk-ui ./luci-app-honk
+              fi
+              # 删除空壳文件夹
+              rm -rf luci-app-honk
+          fi
+
+          # 打印一下当前根目录，确认 honk 和 luci-app-honk 已经出来了
+          ls -la
+
       # ============================================================
-      # 4. 调用 Docker SDK Action 进行极速编译
+      # 3. 调用 Docker SDK Action 进行极速编译
       # ============================================================
       - name: Build Packages via Docker
         # 🚨 换成你 fork 的仓库
@@ -64,7 +65,7 @@ jobs:
           V: s # 开启详细日志，寻找 exit code 2 的真正原因
 
       # ============================================================
-      # 5. 打包产物并发布
+      # 4. 打包产物并发布
       # ============================================================
       - name: Create compress files
         run: |
