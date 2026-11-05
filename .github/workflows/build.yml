@@ -193,8 +193,8 @@ jobs:
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "x86-64-apks"
-          name: "OprX 专属库 (x86_64)"
+          tag_name: "x86-64-apks-v2"
+          name: "OprX 专属库 (x86_64)-2"
           files: output/*
           token: ${{ secrets.GITHUB_TOKEN }}
           allow_updates: true
