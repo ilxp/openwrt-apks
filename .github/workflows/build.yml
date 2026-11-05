@@ -114,13 +114,14 @@ jobs:
           echo "PKGS_LIST=$FINAL_PKGS" >> $GITHUB_ENV
 
       # ============================================================
-      # 5. 下载 SDK 并编译 (完全摒弃 Docker)
+      # 5. 下载 SDK 并编译 (带自动纠错与路径探测)
       # ============================================================
       - name: Build Packages
         env:
           SDK_VER: "25.12.2"
           GOPROXY: "https://goproxy.cn,direct"
           GOSUMDB: "sum.golang.google.cn"
+          WARN_RECURSIVE_DEP: "1"
         run: |
           set -euo pipefail
           export PATH="${{ github.workspace }}/tools:${{ github.workspace }}/tools/zig:$PATH"
@@ -140,18 +141,50 @@ jobs:
           echo "==> 拷贝自定义源码..."
           mkdir -p package/custom
           cp -r ../package/custom/* package/custom/
+          
+          echo "==> 生成 defconfig (忽略 Kconfig 循环依赖)..."
           make defconfig
           
-          # ★ 核心修复：先确保目录存在，再对整个 bin 目录做快照
+          # ★ 记录编译前的文件快照，用于后续精准提取
           mkdir -p bin
           echo "==> 正在记录 SDK 编译前的文件快照..."
           find bin -name "*.apk" | sort > /tmp/sdk_original_apks.txt
           echo "自带包数量: $(wc -l < /tmp/sdk_original_apks.txt)"
           
+          echo "======================================================"
+          echo "🚀 开始逐包编译..."
+          echo "======================================================"
           FAILED_PKGS=""
+          
           for pkg in ${{ env.PKGS_LIST }}; do
-              echo "================ 正在编译 $pkg ================"
-              if make package/custom/$pkg/compile V=s -j$(nproc); then
+              echo "================ 正在检查 $pkg ================"
+              
+              PKG_DIR="package/custom/$pkg"
+              
+              # 1. 检查目录是否存在
+              if [ ! -d "$PKG_DIR" ]; then
+                  echo "❌ 目录不存在: $PKG_DIR，跳过"
+                  FAILED_PKGS="$FAILED_PKGS $pkg(NoDir)"
+                  continue
+              fi
+              
+              # 2. 查找真实的 Makefile（防止作者多嵌套了一层文件夹）
+              if [ ! -f "$PKG_DIR/Makefile" ]; then
+                  SUB_MAKEFILE=$(find "$PKG_DIR" -maxdepth 2 -name Makefile | head -n 1)
+                  if [ -n "$SUB_MAKEFILE" ]; then
+                      # 找到了嵌套的 Makefile，把编译目标切换为子目录
+                      PKG_DIR=$(dirname "$SUB_MAKEFILE")
+                      echo "⚠️ 发现 Makefile 在子目录中，自动调整编译路径为: $PKG_DIR"
+                  else
+                      echo "❌ 在 $PKG_DIR 中找不到 Makefile，可能不是 OpenWrt 包，跳过"
+                      FAILED_PKGS="$FAILED_PKGS $pkg(NoMakefile)"
+                      continue
+                  fi
+              fi
+              
+              # 3. 执行编译
+              echo "==> 正在编译: make $PKG_DIR/compile"
+              if make $PKG_DIR/compile V=s -j$(nproc); then
                   echo "✅ $pkg 编译成功"
               else
                   echo "❌ $pkg 编译失败！"
@@ -160,8 +193,10 @@ jobs:
           done
           
           if [ -n "$FAILED_PKGS" ]; then
-              echo "⚠️ 以下包编译失败: $FAILED_PKGS"
+              echo "⚠️ 以下包编译失败或被跳过: $FAILED_PKGS"
               echo "FAILED_PKGS=$FAILED_PKGS" >> $GITHUB_ENV
+          else
+              echo "🎉 所有包编译完毕，没有遗漏！"
           fi
 
       - name: Collect and Extract Custom Packages
