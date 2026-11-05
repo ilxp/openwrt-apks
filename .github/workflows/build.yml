@@ -1,10 +1,7 @@
-name: Build APKs (x86_64 Native)
+name: Build APKs (Dynamic Fetch & SDK)
 
 on:
   workflow_dispatch:
-  #push:
-    #paths:
-      #- 'packages.list'
 
 permissions:
   contents: write
@@ -17,74 +14,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # ============================================================
-      # 1. 准备 honk 的特种工具链
-      # ============================================================
-      - name: Resolve honk toolchain versions
-        id: honk-toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 https://github.com/QiuSimons/luci-app-honk /tmp/luci-app-honk
-          . /tmp/luci-app-honk/honk/honk_toolchain.sh
-          echo "zig_version=${ZIG_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "bpf_linker_version=${BPF_LINKER_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "bpf_linker_sha256=${BPF_LINKER_SHA256}" >> "$GITHUB_OUTPUT"
-
-      - name: Download and extract Zig
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p tools
-          V="${{ steps.honk-toolchain.outputs.zig_version }}"
-          echo "准备下载 Zig ${V}..."
-
-          # 1. 通过官方 index.json 查找真实的下载链接
-          URL=$(curl -fsSL "https://ziglang.org/download/index.json" | jq -r --arg v "$V" '.[$v]."x86_64-linux".tarball // empty' || true)
-          
-          # 2. 如果没有找到，尝试去 v 前缀
-          if [ -z "$URL" ] && [[ "$V" == v* ]]; then
-            URL=$(curl -fsSL "https://ziglang.org/download/index.json" | jq -r --arg v "${V#v}" '.[$v]."x86_64-linux".tarball // empty' || true)
-          fi
-
-          # 3. 兜底拼凑
-          if [ -z "$URL" ]; then
-            CLEAN_V="${V#v}"
-            URL="https://ziglang.org/download/${CLEAN_V}/zig-x86_64-linux-${CLEAN_V}.tar.xz"
-          fi
-
-          echo "最终解析到的下载地址: $URL"
-          curl -fsSL -o /tmp/zig.tar.xz "$URL"
-
-          # 4. 解压并重命名目录
-          tar -xf /tmp/zig.tar.xz -C tools/
-          EXTRACTED_DIR=$(find tools -maxdepth 1 -type d -name "zig-*" ! -name "zig" | head -n 1)
-          if [ -n "$EXTRACTED_DIR" ] && [ "$EXTRACTED_DIR" != "tools/zig" ]; then
-              mv "$EXTRACTED_DIR" tools/zig
-          fi
-          ./tools/zig/zig version
-
-      - name: Download bpf-linker
-        shell: bash
-        run: |
-          set -euo pipefail
-          V="${{ steps.honk-toolchain.outputs.bpf_linker_version }}"
-          SHA="${{ steps.honk-toolchain.outputs.bpf_linker_sha256 }}"
-          curl -fsSL -o /tmp/bpf-linker.tar.zst "https://github.com/aya-rs/bpf-linker/releases/download/v${V}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
-          echo "${SHA}  /tmp/bpf-linker.tar.zst" | sha256sum -c -
-          tar --zstd -xf /tmp/bpf-linker.tar.zst -C tools/
-          chmod +x tools/bpf-linker
-
-      # ============================================================
-      # 2. 安装宿主机的编译环境
-      # ============================================================
-      - name: Install Host Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libncurses5-dev zlib1g-dev gawk \
-            git gettext libssl-dev xsltproc wget unzip python3 zstd rsync file
-
-      # ============================================================
-      # 3. 准备源码到 package 目录
+      # 1. 临时拉取源码
       # ============================================================
       - name: Fetch Source Code
         run: |
@@ -92,152 +22,65 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 4. 从 packages.list 提取包名
+      # 2. 现场执行你的魔改（从 Update PKG 复制过来）
       # ============================================================
-      - name: Extract Package List
-        id: extract_pkgs
+      - name: Apply Patches & Modifications
         run: |
-          PKGS=""
-          while IFS='|' read -r line; do
-              [[ -z "$line" || "$line" == \#* ]] && continue
-              IFS='|' read -ra parts <<< "$line"
-              if [ "${parts[0]}" == "full" ]; then
-                  PKGS="$PKGS ${parts[1]}"
-              elif [ "${parts[0]}" == "sparse" ]; then
-                  for ((i=4; i<${#parts[@]}; i++)); do
-                      PKGS="$PKGS $(basename "${parts[$i]}")"
-                  done
-              fi
-          done < packages.list
-          FINAL_PKGS=$(echo "$PKGS" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
-          echo "解析出的包: $FINAL_PKGS"
-          echo "PKGS_LIST=$FINAL_PKGS" >> $GITHUB_ENV
+          # 这里的命令只是示例，请把你 Update PKG 里的 patch 和 sed 命令全贴过来！
+          
+          # 例如：
+          # sed -i '/AUTOLOAD/d' ./package/custom/shortcut-fe/shortcut-fe/Makefile
+          # patch -l -p0 < patches/OpenAppFilter-disable-auto-load-engine.patch
+          
+          # 调整嵌套目录结构（如果 sbwml 找不到 Makefile）
+          # 如果有的源码里嵌套了同名文件夹（如 xxx/xxx/Makefile），需要提出来
+          
+          echo "魔改完成！"
 
       # ============================================================
-      # 5. 下载 SDK 并编译 (带自动纠错与路径探测)
+      # 3. 源码归位（重要！）
       # ============================================================
-      - name: Build Packages
+      - name: Prepare Source for SDK Action
+        run: |
+          # 将源码移动到仓库根目录，供 Docker 内的 SDK 读取
+          mv package/custom/* ./
+          rm -rf package
+
+      # ============================================================
+      # 4. 调用 Docker SDK Action 进行极速编译
+      # ============================================================
+      - name: Build Packages via Docker
+        # 🚨 换成你 fork 的仓库
+        uses: ilxp/openwrt-gh-action-sdk@go1.26
         env:
-          SDK_VER: "25.12.2"
-          GOPROXY: "https://goproxy.cn,direct"
-          GOSUMDB: "sum.golang.google.cn"
-          WARN_RECURSIVE_DEP: "1"
-        run: |
-          set -euo pipefail
-          export PATH="${{ github.workspace }}/tools:${{ github.workspace }}/tools/zig:$PATH"
-          
-          echo "==> 下载解压 SDK..."
-          SDK_URL="https://downloads.immortalwrt.org/releases/${SDK_VER}/targets/x86/64/immortalwrt-sdk-${SDK_VER}-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-          wget -q "$SDK_URL" -O sdk.tar.zst
-          tar --zstd -xf sdk.tar.zst
-          mv immortalwrt-sdk-* sdk
-          cd sdk
-          
-          echo "==> 更新 Feeds..."
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          ./scripts/feeds install golang rust
-          
-          echo "==> 拷贝自定义源码..."
-          mkdir -p package/custom
-          cp -r ../package/custom/* package/custom/
-          
-          echo "==> 生成 defconfig (忽略 Kconfig 循环依赖)..."
-          make defconfig
-          
-          # ★ 记录编译前的文件快照，用于后续精准提取
-          mkdir -p bin
-          echo "==> 正在记录 SDK 编译前的文件快照..."
-          find bin -name "*.apk" | sort > /tmp/sdk_original_apks.txt
-          echo "自带包数量: $(wc -l < /tmp/sdk_original_apks.txt)"
-          
-          echo "======================================================"
-          echo "🚀 开始逐包编译..."
-          echo "======================================================"
-          FAILED_PKGS=""
-          
-          for pkg in ${{ env.PKGS_LIST }}; do
-              echo "================ 正在检查 $pkg ================"
-              
-              PKG_DIR="package/custom/$pkg"
-              
-              # 1. 检查目录是否存在
-              if [ ! -d "$PKG_DIR" ]; then
-                  echo "❌ 目录不存在: $PKG_DIR，跳过"
-                  FAILED_PKGS="$FAILED_PKGS $pkg(NoDir)"
-                  continue
-              fi
-              
-              # 2. 查找真实的 Makefile（防止作者多嵌套了一层文件夹）
-              if [ ! -f "$PKG_DIR/Makefile" ]; then
-                  SUB_MAKEFILE=$(find "$PKG_DIR" -maxdepth 2 -name Makefile | head -n 1)
-                  if [ -n "$SUB_MAKEFILE" ]; then
-                      # 找到了嵌套的 Makefile，把编译目标切换为子目录
-                      PKG_DIR=$(dirname "$SUB_MAKEFILE")
-                      echo "⚠️ 发现 Makefile 在子目录中，自动调整编译路径为: $PKG_DIR"
-                  else
-                      echo "❌ 在 $PKG_DIR 中找不到 Makefile，可能不是 OpenWrt 包，跳过"
-                      FAILED_PKGS="$FAILED_PKGS $pkg(NoMakefile)"
-                      continue
-                  fi
-              fi
-              
-              # 3. 执行编译
-              echo "==> 正在编译: make $PKG_DIR/compile"
-              if make $PKG_DIR/compile V=s -j$(nproc); then
-                  echo "✅ $pkg 编译成功"
-              else
-                  echo "❌ $pkg 编译失败！"
-                  FAILED_PKGS="$FAILED_PKGS $pkg"
-              fi
-          done
-          
-          if [ -n "$FAILED_PKGS" ]; then
-              echo "⚠️ 以下包编译失败或被跳过: $FAILED_PKGS"
-              echo "FAILED_PKGS=$FAILED_PKGS" >> $GITHUB_ENV
-          else
-              echo "🎉 所有包编译完毕，没有遗漏！"
-          fi
+          ARCH: x86_64-openwrt-25.12
+          FEEDNAME: packages_ci
+          # 填你需要编译的包名，以 Makefile 里的 PKG_NAME 为准
+          PACKAGES: "honk luci-app-honk luci-app-controlplus admask onup luci-app-qosmate qosmate luci-app-podman luci-theme-argon openwrt-clashoo luci-app-mosdns"
+          NO_REFRESH_CHECK: true
+          # 如果有需要，这里可以开详细日志
+          # V: s
 
-      - name: Collect and Extract Custom Packages
+      # ============================================================
+      # 5. 打包产物并发布
+      # ============================================================
+      - name: Create compress files
         run: |
-          mkdir -p output
-          echo "==> 正在精准提取属于我们的 APK..."
-          
-          # 1. 生成编译后的快照
-          find sdk/bin -name "*.apk" | sort > /tmp/sdk_after_apks.txt
-          
-          # 2. 对比出所有新生成的文件
-          comm -13 /tmp/sdk_original_apks.txt /tmp/sdk_after_apks.txt > /tmp/new_apks.txt || true
-          
-          # 3. 复制到 output 目录
-          FOUND_COUNT=0
-          while IFS= read -r file; do
-              if [ -f "$file" ]; then
-                  cp "$file" output/
-                  FOUND_COUNT=$((FOUND_COUNT+1))
-              fi
-          done < /tmp/new_apks.txt
-          
-          # 4. 🎯 终极清洗：只保留你 packages.list 里的自建包关键字
-          cd output
-          
-          # 构造白名单正则（匹配包名包含以下任意关键字的文件）
-          KEEP_PATTERN="(iqos|admask|controlplus|onup|argon|clashoo|mosdns|qosmate|oaf|wrtbwmon|openlist2|podman|bandix|taskplan|partexp|usb-printer|vlmcsd|ramfree|zerotier|flowcone|nat6)"
-          
-          # 找出所有不包含上述关键字的 apk，并删掉
-          ls *.apk | grep -vE "$KEEP_PATTERN" | xargs -r rm -f
-          
-          echo "======================================================"
-          echo "提取并清理完成！以下是你真正需要的自建 APK："
-          echo "======================================================"
-          ls -lh
+          # sbwml 的 Action 编译后，产物会在 bin/packages/x86_64/ 下
+          ls -la bin/packages/x86_64/
+          tar -zcvf OprX-Packages-x86_64.tar.gz -C bin/packages/x86_64/ packages_ci
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OprX-Packages-x86_64
+          path: "OprX-Packages-x86_64.tar.gz"
 
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "x86-64-apks-v2"
           name: "OprX 专属库 (x86_64)-2"
-          files: output/*
+          files: OprX-Packages-x86_64.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
           allow_updates: true
