@@ -164,7 +164,7 @@ jobs:
               echo "FAILED_PKGS=$FAILED_PKGS" >> $GITHUB_ENV
           fi
 
-       - name: Collect and Extract Custom Packages
+      - name: Collect and Extract Custom Packages
         run: |
           mkdir -p output
           echo "==> 正在精准提取属于我们的 APK..."
