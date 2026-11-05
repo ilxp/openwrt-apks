@@ -22,54 +22,74 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 2. 源码归位（重要！）
+      # 2. 现场执行魔改（把你 Update PKG 里的补丁命令贴到这里）
+      # ============================================================
+      - name: Apply Patches & Modifications
+        run: |
+          # 例如：
+          # sed -i '/AUTOLOAD/d' ./package/custom/shortcut-fe/shortcut-fe/Makefile
+          # patch -l -p0 < patches/OpenAppFilter-disable-auto-load-engine.patch
+          echo "魔改完成！"
+
+      # ============================================================
+      # 3. 源码归位 & 智能展平 (解决嵌套文件夹问题)
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
-          # 1. 先把所有源码移到根目录
+          # 将源码移动到根目录
           mv package/custom/* ./ || true
           rm -rf package
 
-          # 2. 特殊处理 honk 的嵌套目录
-          if [ -d "luci-app-honk" ]; then
-              echo "发现 luci-app-honk 目录，正在展平结构..."
-              # 把核心程序和界面文件夹提取到根目录
-              mv luci-app-honk/honk ./honk || true
-              mv luci-app-honk/luci-app-honk ./luci-app-honk-ui || true
-              # 如果内部也叫 luci-app-honk，先改名避免冲突，再处理
-              if [ -d "luci-app-honk-ui" ]; then
-                  mv luci-app-honk-ui ./luci-app-honk
+          # 自动展平：如果某个文件夹里只有一个同名文件夹且有 Makefile，就提出来
+          for dir in */; do
+              dir=${dir%/}
+              if [ -d "$dir/$dir" ] && [ ! -f "$dir/Makefile" ]; then
+                  echo "发现嵌套结构: $dir/$dir -> 正在展平"
+                  mv "$dir/$dir"/* "$dir/" 2>/dev/null || true
+                  rm -rf "$dir/$dir"
               fi
-              # 删除空壳文件夹
-              rm -rf luci-app-honk
-          fi
-
-          # 打印一下当前根目录，确认 honk 和 luci-app-honk 已经出来了
-          ls -la
+          done
 
       # ============================================================
-      # 3. 调用 Docker SDK Action 进行极速编译
+      # 4. 🌟 核心：动态扫描根目录，自动生成包名列表！
+      # ============================================================
+      - name: Extract Package List
+        id: extract_pkgs
+        run: |
+          REAL_PKGS=""
+          # 遍历根目录下的所有文件夹
+          for dir in */; do
+              dir=${dir%/}
+              # 排除 .github、scripts 等非源码目录，如果里面有 Makefile 就是我们要的包
+              if [ -f "$dir/Makefile" ] && [ "$dir" != "scripts" ] && [ "$dir" != "patches" ]; then
+                  REAL_PKGS="$REAL_PKGS $dir"
+              fi
+          done
+          
+          REAL_PKGS=$(echo $REAL_PKGS | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          echo "======================================================"
+          echo "🎯 动态提取到的真实包名: $REAL_PKGS"
+          echo "======================================================"
+          echo "PKGS_LIST=$REAL_PKGS" >> $GITHUB_ENV
+
+      # ============================================================
+      # 5. 调用 Docker SDK Action
       # ============================================================
       - name: Build Packages via Docker
-        # 🚨 换成你 fork 的仓库
-        uses: ilxp/openwrt-gh-action-sdk@main
+        uses: ilxp/openwrt-gh-action-sdk@go1.26
         env:
           ARCH: x86_64-openwrt-25.12
           FEEDNAME: packages_ci
-          # 填你需要编译的包名，以 Makefile 里的 PKG_NAME 为准
-          PACKAGES: "honk luci-app-honk luci-app-controlplus admask onup luci-app-qosmate qosmate luci-app-podman luci-theme-argon openwrt-clashoo luci-app-mosdns"
-          #PACKAGES: "honk"  # 先只测试这一个包
+          # 👇 直接使用上一步动态提取出来的环境变量！
+          PACKAGES: ${{ env.PKGS_LIST }}
           NO_REFRESH_CHECK: true
-          # 如果有需要，这里可以开详细日志
-          IGNORE_ERRORS: true # 忽略错误
-          V: s # 开启详细日志，寻找 exit code 2 的真正原因
+          # V: s
 
       # ============================================================
-      # 4. 打包产物并发布
+      # 6. 打包产物并发布
       # ============================================================
       - name: Create compress files
         run: |
-          # sbwml 的 Action 编译后，产物会在 bin/packages/x86_64/ 下
           ls -la bin/packages/x86_64/
           tar -zcvf OprX-Packages-x86_64.tar.gz -C bin/packages/x86_64/ packages_ci
 
