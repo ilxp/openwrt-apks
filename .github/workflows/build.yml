@@ -207,11 +207,10 @@ jobs:
           # 1. 生成编译后的快照
           find sdk/bin -name "*.apk" | sort > /tmp/sdk_after_apks.txt
           
-          # 2. 使用 comm 对比编译前后的差异，找出这次新生成的文件！
-          # 同时使用 grep -vE 过滤掉那些被连带编译出来的官方内核模块(kmod-)等依赖包
-          comm -13 /tmp/sdk_original_apks.txt /tmp/sdk_after_apks.txt | grep -vE '/(kmod-|kernel|libc-|libopenssl|base-files|libgcc)' > /tmp/new_apks.txt || true
+          # 2. 对比出所有新生成的文件
+          comm -13 /tmp/sdk_original_apks.txt /tmp/sdk_after_apks.txt > /tmp/new_apks.txt || true
           
-          # 3. 检查并复制出我们自己的包
+          # 3. 复制到 output 目录
           FOUND_COUNT=0
           while IFS= read -r file; do
               if [ -f "$file" ]; then
@@ -220,10 +219,19 @@ jobs:
               fi
           done < /tmp/new_apks.txt
           
+          # 4. 🎯 终极清洗：只保留你 packages.list 里的自建包关键字
+          cd output
+          
+          # 构造白名单正则（匹配包名包含以下任意关键字的文件）
+          KEEP_PATTERN="(iqos|admask|controlplus|onup|argon|clashoo|mosdns|qosmate|oaf|wrtbwmon|openlist2|podman|bandix|taskplan|partexp|usb-printer|vlmcsd|ramfree|zerotier|flowcone|nat6)"
+          
+          # 找出所有不包含上述关键字的 apk，并删掉
+          ls *.apk | grep -vE "$KEEP_PATTERN" | xargs -r rm -f
+          
           echo "======================================================"
-          echo "提取完成！共精准抓到 $FOUND_COUNT 个自建 APK 文件。"
+          echo "提取并清理完成！以下是你真正需要的自建 APK："
           echo "======================================================"
-          ls -lh output/
+          ls -lh
 
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
