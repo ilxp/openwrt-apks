@@ -60,6 +60,37 @@ jobs:
           echo "PKGS_LIST=$REAL_PKGS" >> $GITHUB_ENV
 
       # ============================================================
+      # 🌟 提速核心：缓存 OpenWrt 源码与编译中间件
+      # ============================================================
+      - name: Prepare Cache Directories
+        run: |
+          mkdir -p cache/dl cache/build_dir cache/staging_dir
+
+      - name: Cache OpenWrt dl
+        uses: actions/cache@v4
+        with:
+          path: cache/dl
+          key: openwrt-dl-v1-${{ hashFiles('packages.list') }}
+          restore-keys: |
+            openwrt-dl-v1-
+
+      - name: Cache OpenWrt build_dir
+        uses: actions/cache@v4
+        with:
+          path: cache/build_dir
+          key: openwrt-build-v1-${{ hashFiles('packages.list') }}
+          restore-keys: |
+            openwrt-build-v1-
+
+      - name: Cache OpenWrt staging_dir
+        uses: actions/cache@v4
+        with:
+          path: cache/staging_dir
+          key: openwrt-staging-v1-${{ hashFiles('packages.list') }}
+          restore-keys: |
+            openwrt-staging-v1-
+            
+      # ============================================================
       # 5. 调用 Docker SDK Action (去掉了详细日志 V: s，太卡了)
       # ============================================================
       - name: Build Packages via Docker
