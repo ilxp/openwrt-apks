@@ -91,20 +91,44 @@ jobs:
       # ============================================================
       - name: Create compress files
         run: |
-          ls -la bin/packages/x86_64/
-          tar -zcvf OprX-Packages-x86_64.tar.gz -C bin/packages/x86_64/ packages_ci
+          mkdir -p output
+          echo "==> 正在精准提取属于我们的 APK..."
+          
+          # 遍历所有编译出来的 apk
+          for apk in bin/packages/x86_64/packages_ci/*.apk; do
+              [ -e "$apk" ] || continue
+              filename=$(basename "$apk")
+              
+              # 提取包名基础部分（去除版本号），例如 luci-app-clashoo-1.32.0-r1.apk -> luci-app-clashoo
+              base_name=$(echo "$filename" | sed -E 's/-[0-9]+.*//')
+              
+              # 检查这个基础包名是否在我们的 PKGS_LIST 中
+              # 注意：如果你的包名是 luci-app-xxx，但 Makefile 里叫 xxx，请确保 PKGS_LIST 包含它
+              if echo " ${{ env.PKGS_LIST }} " | grep -q " $base_name "; then
+                  cp "$apk" output/
+                  echo "  ✓ $filename"
+              fi
+          done
+          
+          echo "======================================================"
+          echo "提取完成！最终需要发布的 APK："
+          ls -lh output/
+          echo "======================================================"
+          
+          # 将过滤后的包打成压缩包（如果不想让 Release 页面散落几百个文件，用 tar 包最好）
+          tar -zcvf OprX-Packages-x86_64.tar.gz -C output/ .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: OprX-Packages-x86_64
-          path: "OprX-Packages-x86_64.tar.gz"
+          path: output/*.apk
 
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "x86-64-apks-v2"
-          name: "OprX 专属库 (x86_64)-2"
-          files: OprX-Packages-x86_64.tar.gz
+          tag_name: "x86-64-apks"
+          name: "OprX 专属库 (x86_64)"
+          files: output/*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
           allow_updates: true
