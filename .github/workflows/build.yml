@@ -22,46 +22,32 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 2. 现场执行魔改（把你 Update PKG 里的补丁命令贴到这里）
-      # ============================================================
-      - name: Apply Patches & Modifications
-        run: |
-          # 例如：
-          # sed -i '/AUTOLOAD/d' ./package/custom/shortcut-fe/shortcut-fe/Makefile
-          # patch -l -p0 < patches/OpenAppFilter-disable-auto-load-engine.patch
-          echo "魔改完成！"
-
-      # ============================================================
-      # 3. 源码归位 & 智能展平 (解决嵌套文件夹问题)
+      # 3. 源码归位 & 智能展平
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
           mv package/custom/* ./ || true
           rm -rf package
-
-          # 暴力展平 honk
-          if [ -d "luci-app-honk" ]; then
-              echo "=== 展平 honk 目录 ==="
-              [ -d "luci-app-honk/honk" ] && mv "luci-app-honk/honk" ./honk
-              [ -d "luci-app-honk/luci-app-honk" ] && mv "luci-app-honk/luci-app-honk" ./luci-app-honk-ui && mv "luci-app-honk-ui" "./luci-app-honk" || true
-              rm -rf "luci-app-honk/honk" 2>/dev/null || true
-              if [ -d "luci-app-honk" ] && [ ! -f "luci-app-honk/Makefile" ]; then rm -rf "luci-app-honk"; fi
-          fi
-
-          #echo "🔍 检查 honk 源码："
-          #ls -la honk/Makefile
+          
+          # 自动展平：如果某个文件夹里只有同名子文件夹且有 Makefile，就提出来
+          for dir in */; do
+              dir=${dir%/}
+              if [ -d "$dir/$dir" ] && [ ! -f "$dir/Makefile" ]; then
+                  echo "发现嵌套结构: $dir/$dir -> 正在展平"
+                  mv "$dir/$dir"/* "$dir/" 2>/dev/null || true
+                  rm -rf "$dir/$dir"
+              fi
+          done
 
       # ============================================================
-      # 4. 🌟 核心：动态扫描根目录，自动生成包名列表！
+      # 4. 🌟 动态提取包名列表 (供编译使用)
       # ============================================================
       - name: Extract Package List
         id: extract_pkgs
         run: |
           REAL_PKGS=""
-          # 遍历根目录下的所有文件夹
           for dir in */; do
               dir=${dir%/}
-              # 排除 .github、scripts 等非源码目录，如果里面有 Makefile 就是我们要的包
               if [ -f "$dir/Makefile" ] && [ "$dir" != "scripts" ] && [ "$dir" != "patches" ]; then
                   REAL_PKGS="$REAL_PKGS $dir"
               fi
@@ -69,55 +55,51 @@ jobs:
           
           REAL_PKGS=$(echo $REAL_PKGS | tr ' ' '\n' | sort -u | tr '\n' ' ')
           echo "======================================================"
-          echo "🎯 动态提取到的真实包名: $REAL_PKGS"
+          echo "🎯 准备编译的源码包名: $REAL_PKGS"
           echo "======================================================"
           echo "PKGS_LIST=$REAL_PKGS" >> $GITHUB_ENV
 
       # ============================================================
-      # 5. 调用 Docker SDK Action
+      # 5. 调用 Docker SDK Action (去掉了详细日志 V: s，太卡了)
       # ============================================================
       - name: Build Packages via Docker
         uses: ilxp/openwrt-gh-action-sdk@main
         env:
           ARCH: x86_64-openwrt-25.12
           FEEDNAME: packages_ci
-          # 👇 直接使用上一步动态提取出来的环境变量！
           PACKAGES: ${{ env.PKGS_LIST }}
           NO_REFRESH_CHECK: true
-          V: s
 
       # ============================================================
-      # 6. 打包产物并发布
+      # 6. 🎯 核心：白名单正则过滤 (剔除几百个依赖包)
       # ============================================================
       - name: Create compress files
         run: |
           mkdir -p output
           echo "==> 正在精准提取属于我们的 APK..."
           
-          # 遍历所有编译出来的 apk
+          # 构造白名单正则（匹配包名包含以下任意关键字的文件）
+          # 这个正则匹配你所有的自建包名称，不管目录叫什么，只要产物带这些关键字就保留
+          KEEP_PATTERN="(iqos|admask|controlplus|onup|argon|clashoo|mosdns|qosmate|oaf|wrtbwmon|openlist2|podman|bandix|taskplan|partexp|usb-printer|vlmcsd|ramfree|zerotier|flowcone|nat6)"
+          
           for apk in bin/packages/x86_64/packages_ci/*.apk; do
               [ -e "$apk" ] || continue
               filename=$(basename "$apk")
               
-              # 提取包名基础部分（去除版本号），例如 luci-app-clashoo-1.32.0-r1.apk -> luci-app-clashoo
-              base_name=$(echo "$filename" | sed -E 's/-[0-9]+.*//')
-              
-              # 检查这个基础包名是否在我们的 PKGS_LIST 中
-              # 注意：如果你的包名是 luci-app-xxx，但 Makefile 里叫 xxx，请确保 PKGS_LIST 包含它
-              if echo " ${{ env.PKGS_LIST }} " | grep -q " $base_name "; then
+              # 使用正则匹配，只要包含关键字，就复制过去
+              if echo "$filename" | grep -qE "$KEEP_PATTERN"; then
                   cp "$apk" output/
                   echo "  ✓ $filename"
               fi
           done
           
           echo "======================================================"
-          echo "提取完成！最终需要发布的 APK："
-          ls -lh output/
+          echo "提取完成！最终需要发布的 APK 数量: $(ls -1 output/*.apk 2>/dev/null | wc -l)"
           echo "======================================================"
-          
-          # 将过滤后的包打成压缩包（如果不想让 Release 页面散落几百个文件，用 tar 包最好）
-          tar -zcvf OprX-Packages-x86_64.tar.gz -C output/ .
 
+      # ============================================================
+      # 7. 打包与发布
+      # ============================================================
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -127,8 +109,8 @@ jobs:
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "x86-64-apks"
-          name: "OprX 专属库 (x86_64)"
+          tag_name: "x86-64-apks-v3" # 换了新标签，免得跟之前的混在一起
+          name: "OprX 专属库 (x86_64)-3"
           files: output/*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
           allow_updates: true
