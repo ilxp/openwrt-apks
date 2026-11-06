@@ -48,8 +48,8 @@ jobs:
               if [ -d "luci-app-honk" ] && [ ! -f "luci-app-honk/Makefile" ]; then rm -rf "luci-app-honk"; fi
           fi
 
-          echo "🔍 检查 honk 源码："
-          ls -la honk/Makefile
+          #echo "🔍 检查 honk 源码："
+          #ls -la honk/Makefile
 
       # ============================================================
       # 4. 🌟 核心：动态扫描根目录，自动生成包名列表！
