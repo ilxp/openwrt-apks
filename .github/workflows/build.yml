@@ -40,24 +40,49 @@ jobs:
           done
 
       # ============================================================
-      # 4. 🌟 动态提取包名列表 (供编译使用)
+      # 4. 🌟 深度动态提取 (目录名 + PKG_NAME + 子包名 -> 自动生成正则)
       # ============================================================
       - name: Extract Package List
         id: extract_pkgs
         run: |
           REAL_PKGS=""
+          FILTER_PATTERN=""
+          
           for dir in */; do
               dir=${dir%/}
               if [ -f "$dir/Makefile" ] && [ "$dir" != "scripts" ] && [ "$dir" != "patches" ]; then
                   REAL_PKGS="$REAL_PKGS $dir"
+                  
+                  # 1. 把目录名作为兜底
+                  FILTER_PATTERN="${FILTER_PATTERN}|${dir}"
+                  
+                  # 2. 挖出 PKG_NAME:=xxx
+                  pkg_name=$(grep -E "^\s*PKG_NAME\s*:?=\s*" "$dir/Makefile" | awk -F'=' '{print $2}' | awk '{print $1}' | tr -d ' "')
+                  if [ -n "$pkg_name" ] && [[ "$pkg_name" != *'$('* ]]; then
+                      FILTER_PATTERN="${FILTER_PATTERN}|${pkg_name}"
+                  fi
+                  
+                  # 3. 挖出 define Package/xxx (子包)
+                  sub_pkgs=$(grep -E "^\s*define Package/" "$dir/Makefile" | awk -F'/' '{print $2}' | tr -d ' ')
+                  for sub in $sub_pkgs; do
+                      if [ -n "$sub" ] && [[ "$sub" != *'$('* ]]; then
+                          FILTER_PATTERN="${FILTER_PATTERN}|${sub}"
+                      fi
+                  done
               fi
           done
           
+          # 去重、清理
           REAL_PKGS=$(echo $REAL_PKGS | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          FILTER_PATTERN=${FILTER_PATTERN#|} # 去掉开头的 |
+          
           echo "======================================================"
-          echo "🎯 准备编译的源码包名: $REAL_PKGS"
+          echo "🎯 准备编译的源码目录: $REAL_PKGS"
+          echo "🔍 自动生成的过滤正则: ($FILTER_PATTERN)"
           echo "======================================================"
+          
           echo "PKGS_LIST=$REAL_PKGS" >> $GITHUB_ENV
+          echo "DYNAMIC_PATTERN=$FILTER_PATTERN" >> $GITHUB_ENV
 
       # ============================================================
       # 🌟 提速核心：缓存 OpenWrt 源码与编译中间件
@@ -102,23 +127,28 @@ jobs:
           NO_REFRESH_CHECK: true
 
       # ============================================================
-      # 6. 🎯 核心：白名单正则过滤 (剔除几百个依赖包)
+      # 6. 🎯 核心：使用动态正则过滤 (剔除依赖包 + 过滤多国语言)
       # ============================================================
       - name: Create compress files
         run: |
           mkdir -p output
           echo "==> 正在精准提取属于我们的 APK..."
-          
-          # 构造白名单正则（匹配包名包含以下任意关键字的文件）
-          # 这个正则匹配你所有的自建包名称，不管目录叫什么，只要产物带这些关键字就保留
-          KEEP_PATTERN="(iqos|admask|controlplus|onup|argon|clashoo|mosdns|qosmate|oaf|wrtbwmon|openlist2|podman|bandix|taskplan|partexp|usb-printer|vlmcsd|ramfree|zerotier|flowcone|nat6)"
+          echo "使用的动态正则: (${{ env.DYNAMIC_PATTERN }})"
           
           for apk in bin/packages/x86_64/packages_ci/*.apk; do
               [ -e "$apk" ] || continue
               filename=$(basename "$apk")
               
-              # 使用正则匹配，只要包含关键字，就复制过去
-              if echo "$filename" | grep -qE "$KEEP_PATTERN"; then
+              # 使用动态正则匹配包名
+              if echo "$filename" | grep -qE "(${{ env.DYNAMIC_PATTERN }})"; then
+                  
+                  # 语言包只留中文
+                  if echo "$filename" | grep -q "luci-i18n"; then
+                      if ! echo "$filename" | grep -qE "zh-cn|zh-tw"; then
+                          continue
+                      fi
+                  fi
+                  
                   cp "$apk" output/
                   echo "  ✓ $filename"
               fi
