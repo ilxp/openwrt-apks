@@ -1,0 +1,177 @@
+name: Build APKs (Dynamic Fetch & SDK)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build x86_64 Packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ============================================================
+      # 1. 临时拉取源码
+      # ============================================================
+      - name: Fetch Source Code
+        run: |
+          chmod +x scripts/fetch-src.sh
+          ./scripts/fetch-src.sh
+
+      # ============================================================
+      # 3. 源码归位 & 智能展平
+      # ============================================================
+      - name: Prepare Source for SDK Action
+        run: |
+          mv package/custom/* ./ || true
+          rm -rf package
+          
+          # 自动展平：如果某个文件夹里只有同名子文件夹且有 Makefile，就提出来
+          for dir in */; do
+              dir=${dir%/}
+              if [ -d "$dir/$dir" ] && [ ! -f "$dir/Makefile" ]; then
+                  echo "发现嵌套结构: $dir/$dir -> 正在展平"
+                  mv "$dir/$dir"/* "$dir/" 2>/dev/null || true
+                  rm -rf "$dir/$dir"
+              fi
+          done
+
+      # ============================================================
+      # 4. 🌟 深度动态提取 (目录名 + PKG_NAME + 子包名 -> 自动生成正则)
+      # ============================================================
+      - name: Extract Package List
+        id: extract_pkgs
+        run: |
+          REAL_PKGS=""
+          FILTER_PATTERN=""
+          
+          for dir in */; do
+              dir=${dir%/}
+              if [ -f "$dir/Makefile" ] && [ "$dir" != "scripts" ] && [ "$dir" != "patches" ]; then
+                  REAL_PKGS="$REAL_PKGS $dir"
+                  
+                  # 1. 把目录名作为兜底
+                  FILTER_PATTERN="${FILTER_PATTERN}|${dir}"
+                  
+                  # 2. 挖出 PKG_NAME:=xxx
+                  pkg_name=$(grep -E "^\s*PKG_NAME\s*:?=\s*" "$dir/Makefile" | awk -F'=' '{print $2}' | awk '{print $1}' | tr -d ' "')
+                  if [ -n "$pkg_name" ] && [[ "$pkg_name" != *'$('* ]]; then
+                      FILTER_PATTERN="${FILTER_PATTERN}|${pkg_name}"
+                  fi
+                  
+                  # 3. 挖出 define Package/xxx (子包)
+                  sub_pkgs=$(grep -E "^\s*define Package/" "$dir/Makefile" | awk -F'/' '{print $2}' | tr -d ' ')
+                  for sub in $sub_pkgs; do
+                      if [ -n "$sub" ] && [[ "$sub" != *'$('* ]]; then
+                          FILTER_PATTERN="${FILTER_PATTERN}|${sub}"
+                      fi
+                  done
+              fi
+          done
+          
+          # 去重、清理
+          REAL_PKGS=$(echo $REAL_PKGS | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          FILTER_PATTERN=${FILTER_PATTERN#|} # 去掉开头的 |
+          
+          echo "======================================================"
+          echo "🎯 准备编译的源码目录: $REAL_PKGS"
+          echo "🔍 自动生成的过滤正则: ($FILTER_PATTERN)"
+          echo "======================================================"
+          
+          echo "PKGS_LIST=$REAL_PKGS" >> $GITHUB_ENV
+          echo "DYNAMIC_PATTERN=$FILTER_PATTERN" >> $GITHUB_ENV
+
+      # ============================================================
+      # 🌟 提速核心：缓存 OpenWrt 源码与编译中间件
+      # ============================================================
+      - name: Prepare Cache Directories
+        run: |
+          mkdir -p cache/dl cache/build_dir cache/staging_dir
+
+      - name: Cache OpenWrt dl
+        uses: actions/cache@v4
+        with:
+          path: cache/dl
+          key: openwrt-dl-v1-${{ hashFiles('packages.list') }}
+          restore-keys: |
+            openwrt-dl-v1-
+
+      - name: Cache OpenWrt build_dir
+        uses: actions/cache@v4
+        with:
+          path: cache/build_dir
+          key: openwrt-build-v1-${{ hashFiles('packages.list') }}
+          restore-keys: |
+            openwrt-build-v1-
+
+      - name: Cache OpenWrt staging_dir
+        uses: actions/cache@v4
+        with:
+          path: cache/staging_dir
+          key: openwrt-staging-v1-${{ hashFiles('packages.list') }}
+          restore-keys: |
+            openwrt-staging-v1-
+            
+      # ============================================================
+      # 5. 调用 Docker SDK Action (去掉了详细日志 V: s，太卡了)
+      # ============================================================
+      - name: Build Packages via Docker
+        uses: ilxp/openwrt-gh-action-sdk@main
+        env:
+          ARCH: x86_64-openwrt-25.12
+          FEEDNAME: packages_ci
+          PACKAGES: ${{ env.PKGS_LIST }}
+          NO_REFRESH_CHECK: true
+
+      # ============================================================
+      # 6. 🎯 核心：使用动态正则过滤 (剔除依赖包 + 过滤多国语言)
+      # ============================================================
+      - name: Create compress files
+        run: |
+          mkdir -p output
+          echo "==> 正在精准提取属于我们的 APK..."
+          echo "使用的动态正则: (${{ env.DYNAMIC_PATTERN }})"
+          
+          for apk in bin/packages/x86_64/packages_ci/*.apk; do
+              [ -e "$apk" ] || continue
+              filename=$(basename "$apk")
+              
+              # 使用动态正则匹配包名
+              if echo "$filename" | grep -qE "(${{ env.DYNAMIC_PATTERN }})"; then
+                  
+                  # 语言包只留中文
+                  if echo "$filename" | grep -q "luci-i18n"; then
+                      if ! echo "$filename" | grep -qE "zh-cn|zh-tw"; then
+                          continue
+                      fi
+                  fi
+                  
+                  cp "$apk" output/
+                  echo "  ✓ $filename"
+              fi
+          done
+          
+          echo "======================================================"
+          echo "提取完成！最终需要发布的 APK 数量: $(ls -1 output/*.apk 2>/dev/null | wc -l)"
+          echo "======================================================"
+
+      # ============================================================
+      # 7. 打包与发布
+      # ============================================================
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OprX-Packages-x86_64
+          path: output/*.apk
+
+      - name: 发布 APK 到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "x86-64-apks-v3" # 换了新标签，免得跟之前的混在一起
+          name: "OprX 专属库 (x86_64)-3"
+          files: output/*.apk
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allow_updates: true

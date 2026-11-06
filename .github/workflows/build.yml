@@ -1,4 +1,4 @@
-name: Build APKs (Dynamic Fetch & SDK)
+name: Build APKs (Dynamic Fetch & Matrix)
 
 on:
   workflow_dispatch:
@@ -8,8 +8,20 @@ permissions:
 
 jobs:
   build:
-    name: Build x86_64 Packages
+    name: Build ${{ matrix.group }} Packages
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 将极慢的包单独拆出来，并行跑
+          - group: "clashoo"
+            pkg_match: "clashoo"
+          - group: "openlist2"
+            pkg_match: "openlist2"
+          # 剩下的所有包放一组
+          - group: "others"
+            pkg_match: "others"
     steps:
       - uses: actions/checkout@v4
 
@@ -22,14 +34,14 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 3. 源码归位 & 智能展平
+      # 2. 源码归位 & 智能展平
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
           mv package/custom/* ./ || true
           rm -rf package
           
-          # 自动展平：如果某个文件夹里只有同名子文件夹且有 Makefile，就提出来
+          # 自动展平
           for dir in */; do
               dir=${dir%/}
               if [ -d "$dir/$dir" ] && [ ! -f "$dir/Makefile" ]; then
@@ -40,29 +52,36 @@ jobs:
           done
 
       # ============================================================
-      # 4. 🌟 深度动态提取 (目录名 + PKG_NAME + 子包名 -> 自动生成正则)
+      # 3. 按矩阵组别动态提取包名
       # ============================================================
-      - name: Extract Package List
+      - name: Extract Package List (Filtered)
         id: extract_pkgs
         run: |
           REAL_PKGS=""
           FILTER_PATTERN=""
+          GROUP_MATCH="${{ matrix.pkg_match }}"
           
           for dir in */; do
               dir=${dir%/}
               if [ -f "$dir/Makefile" ] && [ "$dir" != "scripts" ] && [ "$dir" != "patches" ]; then
+                  
+                  # 🌟 矩阵分流逻辑
+                  if [ "$GROUP_MATCH" != "others" ]; then
+                      # 如果当前是 clashoo 组，只抓 clashoo 相关的包
+                      if ! echo "$dir" | grep -iq "$GROUP_MATCH"; then continue; fi
+                  else
+                      # 如果是 others 组，避开 clashoo 和 openlist2
+                      if echo "$dir" | grep -iqE "clashoo|openlist2"; then continue; fi
+                  fi
+                  
                   REAL_PKGS="$REAL_PKGS $dir"
                   
-                  # 1. 把目录名作为兜底
+                  # 提取正则，用于后续过滤
                   FILTER_PATTERN="${FILTER_PATTERN}|${dir}"
-                  
-                  # 2. 挖出 PKG_NAME:=xxx
                   pkg_name=$(grep -E "^\s*PKG_NAME\s*:?=\s*" "$dir/Makefile" | awk -F'=' '{print $2}' | awk '{print $1}' | tr -d ' "')
                   if [ -n "$pkg_name" ] && [[ "$pkg_name" != *'$('* ]]; then
                       FILTER_PATTERN="${FILTER_PATTERN}|${pkg_name}"
                   fi
-                  
-                  # 3. 挖出 define Package/xxx (子包)
                   sub_pkgs=$(grep -E "^\s*define Package/" "$dir/Makefile" | awk -F'/' '{print $2}' | tr -d ' ')
                   for sub in $sub_pkgs; do
                       if [ -n "$sub" ] && [[ "$sub" != *'$('* ]]; then
@@ -72,51 +91,56 @@ jobs:
               fi
           done
           
-          # 去重、清理
           REAL_PKGS=$(echo $REAL_PKGS | tr ' ' '\n' | sort -u | tr '\n' ' ')
-          FILTER_PATTERN=${FILTER_PATTERN#|} # 去掉开头的 |
+          FILTER_PATTERN=${FILTER_PATTERN#|}
           
-          echo "======================================================"
-          echo "🎯 准备编译的源码目录: $REAL_PKGS"
-          echo "🔍 自动生成的过滤正则: ($FILTER_PATTERN)"
-          echo "======================================================"
-          
+          echo "🎯 [${{ matrix.group }}] 准备编译的包: $REAL_PKGS"
           echo "PKGS_LIST=$REAL_PKGS" >> $GITHUB_ENV
           echo "DYNAMIC_PATTERN=$FILTER_PATTERN" >> $GITHUB_ENV
 
       # ============================================================
-      # 🌟 提速核心：缓存 OpenWrt 源码与编译中间件
+      # 🌟 提速：各类缓存 (使用 matrix.group 隔离缓存防冲突)
       # ============================================================
       - name: Prepare Cache Directories
-        run: |
-          mkdir -p cache/dl cache/build_dir cache/staging_dir
+        run: mkdir -p cache/dl cache/build_dir cache/staging_dir
 
       - name: Cache OpenWrt dl
         uses: actions/cache@v4
         with:
           path: cache/dl
-          key: openwrt-dl-v1-${{ hashFiles('packages.list') }}
-          restore-keys: |
-            openwrt-dl-v1-
+          key: openwrt-dl-${{ matrix.group }}-${{ hashFiles('packages.list') }}
+          restore-keys: openwrt-dl-${{ matrix.group }}-
 
       - name: Cache OpenWrt build_dir
         uses: actions/cache@v4
         with:
           path: cache/build_dir
-          key: openwrt-build-v1-${{ hashFiles('packages.list') }}
-          restore-keys: |
-            openwrt-build-v1-
+          key: openwrt-build-${{ matrix.group }}-${{ hashFiles('packages.list') }}
+          restore-keys: openwrt-build-${{ matrix.group }}-
 
       - name: Cache OpenWrt staging_dir
         uses: actions/cache@v4
         with:
           path: cache/staging_dir
-          key: openwrt-staging-v1-${{ hashFiles('packages.list') }}
-          restore-keys: |
-            openwrt-staging-v1-
-            
+          key: openwrt-staging-${{ matrix.group }}-${{ hashFiles('packages.list') }}
+          restore-keys: openwrt-staging-${{ matrix.group }}-
+
+      # 缓存 Go 和 Rust 编译缓存（巨幅加速 clashoo 和 openlist2）
+      - name: Cache Go Modules & Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: lang-cache-${{ matrix.group }}-${{ github.sha }}
+          restore-keys: lang-cache-${{ matrix.group }}-
+
       # ============================================================
-      # 5. 调用 Docker SDK Action (去掉了详细日志 V: s，太卡了)
+      # 4. 调用 Docker SDK Action
       # ============================================================
       - name: Build Packages via Docker
         uses: ilxp/openwrt-gh-action-sdk@main
@@ -127,51 +151,54 @@ jobs:
           NO_REFRESH_CHECK: true
 
       # ============================================================
-      # 6. 🎯 核心：使用动态正则过滤 (剔除依赖包 + 过滤多国语言)
+      # 5. 🎯 精准提取产物
       # ============================================================
-      - name: Create compress files
+      - name: Collect Artifacts
         run: |
           mkdir -p output
-          echo "==> 正在精准提取属于我们的 APK..."
-          echo "使用的动态正则: (${{ env.DYNAMIC_PATTERN }})"
-          
           for apk in bin/packages/x86_64/packages_ci/*.apk; do
               [ -e "$apk" ] || continue
               filename=$(basename "$apk")
-              
-              # 使用动态正则匹配包名
               if echo "$filename" | grep -qE "(${{ env.DYNAMIC_PATTERN }})"; then
-                  
-                  # 语言包只留中文
                   if echo "$filename" | grep -q "luci-i18n"; then
-                      if ! echo "$filename" | grep -qE "zh-cn|zh-tw"; then
-                          continue
-                      fi
+                      if ! echo "$filename" | grep -qE "zh-cn|zh-tw"; then continue; fi
                   fi
-                  
                   cp "$apk" output/
-                  echo "  ✓ $filename"
               fi
           done
-          
-          echo "======================================================"
-          echo "提取完成！最终需要发布的 APK 数量: $(ls -1 output/*.apk 2>/dev/null | wc -l)"
-          echo "======================================================"
+          ls -lh output/
 
       # ============================================================
-      # 7. 打包与发布
+      # 6. 上传 Artifact 供发布阶段使用
       # ============================================================
-      - name: Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: OprX-Packages-x86_64
+          name: apks-${{ matrix.group }}
           path: output/*.apk
+
+  # ============================================================
+  # 🌟 独立发布 Job (等所有编译组跑完，统一发布，避免并发冲突)
+  # ============================================================
+  release:
+    name: Release Packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List Files
+        run: ls -lh artifacts/
 
       - name: 发布 APK 到 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "x86-64-apks-v3" # 换了新标签，免得跟之前的混在一起
+          tag_name: "x86-64-apks-v3"
           name: "OprX 专属库 (x86_64)-3"
-          files: output/*.apk
+          files: artifacts/*.apk
           token: ${{ secrets.GITHUB_TOKEN }}
           allow_updates: true
