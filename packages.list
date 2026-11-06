@@ -19,9 +19,9 @@ full|luci-theme-argon|https://github.com/jerrykuku/luci-theme-argon.git|master
 
 # ---- 代理与 VPN ----
 #full|luci-app-homeproxy|https://github.com/immortalwrt/homeproxy.git|master
-full|luci-app-honk|https://github.com/QiuSimons/luci-app-honk.git|master
+#full|luci-app-honk|https://github.com/QiuSimons/luci-app-honk.git|master
 #full|vmlinux-btf|https://github.com/QiuSimons/vmlinux-btf.git|master
-full|vmlinux-btf|https://github.com/sbwml/package_kernel_vmlinux-btf.git|master
+#full|vmlinux-btf|https://github.com/sbwml/package_kernel_vmlinux-btf.git|master
 #full|OpenClash|https://github.com/vernesong/OpenClash.git|master
 #full|OpenWrt-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki.git|main
 
