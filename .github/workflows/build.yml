@@ -34,20 +34,35 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 2. 源码归位 & 智能展平
+      # 2. 源码归位 & 智能递归展平
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
           mv package/custom/* ./ || true
           rm -rf package
           
-          # 自动展平
+          # 智能递归展平
           for dir in */; do
               dir=${dir%/}
-              if [ -d "$dir/$dir" ] && [ ! -f "$dir/Makefile" ]; then
-                  echo "发现嵌套结构: $dir/$dir -> 正在展平"
-                  mv "$dir/$dir"/* "$dir/" 2>/dev/null || true
-                  rm -rf "$dir/$dir"
+              # 如果这个目录自己就是个包，跳过
+              if [ -f "$dir/Makefile" ]; then
+                  continue
+              fi
+              
+              # 如果没有 Makefile，但里面有包含 Makefile 的子目录，把子目录提出来！
+              extracted=0
+              for subdir in "$dir"/*/; do
+                  subdir=${subdir%/}
+                  if [ -f "$subdir/Makefile" ]; then
+                      echo "展平提取: $subdir -> ./"
+                      mv "$subdir" ./
+                      extracted=1
+                  fi
+              done
+              
+              # 如果提取过，或者本来就是空壳，删掉外层
+              if [ "$extracted" -eq 1 ] || [ ! "$(ls -A "$dir")" ]; then
+                  rm -rf "$dir"
               fi
           done
 
@@ -176,6 +191,7 @@ jobs:
         with:
           name: apks-${{ matrix.group }}
           path: output/*.apk
+          if-no-files-found: warn # 空包不报错
 
   # ============================================================
   # 🌟 独立发布 Job (等所有编译组跑完，统一发布，避免并发冲突)
