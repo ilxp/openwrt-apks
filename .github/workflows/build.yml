@@ -34,37 +34,65 @@ jobs:
           ./scripts/fetch-src.sh
 
       # ============================================================
-      # 2. 源码归位 & 智能递归展平
+      # 2. 源码归位 & 智能递归展平 (终极防冲突版)
       # ============================================================
       - name: Prepare Source for SDK Action
         run: |
           mv package/custom/* ./ || true
           rm -rf package
           
-          # 智能递归展平
+          # 创建一个临时中转站，专门用来接住提取出来的子包
+          mkdir -p _flatten_tmp
+          
           for dir in */; do
               dir=${dir%/}
-              # 如果这个目录自己就是个包，跳过
+              
+              # 排除系统目录和我们自己建的目录
+              if [ "$dir" = "scripts" ] || [ "$dir" = "patches" ] || [ "$dir" = "cache" ] || [ "$dir" = "output" ] || [ "$dir" = "_flatten_tmp" ]; then
+                  continue
+              fi
+              
+              # 如果这个目录自己已经有 Makefile，说明它本身就是个包，跳过
               if [ -f "$dir/Makefile" ]; then
                   continue
               fi
               
-              # 如果没有 Makefile，但里面有包含 Makefile 的子目录，把子目录提出来！
+              # 如果没有 Makefile，寻找里面的子包
               extracted=0
               for subdir in "$dir"/*/; do
                   subdir=${subdir%/}
                   if [ -f "$subdir/Makefile" ]; then
-                      echo "展平提取: $subdir -> ./"
-                      mv "$subdir" ./
+                      subdir_name=$(basename "$subdir")
+                      echo "展平提取: $subdir -> _flatten_tmp/$subdir_name"
+                      # 把子包移到中转站
+                      mv "$subdir" "_flatten_tmp/$subdir_name"
                       extracted=1
                   fi
               done
               
-              # 如果提取过，或者本来就是空壳，删掉外层
-              if [ "$extracted" -eq 1 ] || [ ! "$(ls -A "$dir")" ]; then
+              # 如果提取过子包，或者原来就是个空壳，把外层彻底删掉！
+              # 这样等下把子包从中转站移回来时，就不会有同名冲突了
+              if [ "$extracted" -eq 1 ] || [ ! "$(ls -A "$dir" 2>/dev/null)" ]; then
                   rm -rf "$dir"
               fi
           done
+          
+          # 把中转站里的所有东西移回根目录
+          if [ -d "_flatten_tmp" ]; then
+              for temp_dir in _flatten_tmp/*/; do
+                  temp_dir=${temp_dir%/}
+                  base=$(basename "$temp_dir")
+                  # 如果根目录碰巧还有同名残留（不同仓库里的同名包），强行合并
+                  if [ -e "./$base" ]; then
+                      echo "⚠️ 发现跨仓库同名包冲突，将 $temp_dir 内容合并到 ./$base"
+                      cp -r "$temp_dir"/* "./$base/"
+                      rm -rf "$temp_dir"
+                  else
+                      mv "$temp_dir" ./
+                  fi
+              done
+              rm -rf _flatten_tmp
+          fi
 
       # ============================================================
       # 3. 按矩阵组别动态提取包名
